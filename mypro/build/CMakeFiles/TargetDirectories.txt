@@ -1,0 +1,3 @@
+/mnt/c/Users/刘浩成/source/mypro/build/CMakeFiles/sy2.dir
+/mnt/c/Users/刘浩成/source/mypro/build/CMakeFiles/edit_cache.dir
+/mnt/c/Users/刘浩成/source/mypro/build/CMakeFiles/rebuild_cache.dir
