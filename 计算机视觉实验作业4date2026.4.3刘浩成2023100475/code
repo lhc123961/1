@@ -1,0 +1,240 @@
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+from scipy import fftpack
+
+# 设置绘图风格
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+plt.rcParams['axes.unicode_minus'] = False
+
+# ==========================================
+# 辅助函数：生成测试图像
+# ==========================================
+def create_test_images(size=512):
+    """生成棋盘格和 Chirp 信号图"""
+    # 1. 棋盘格 (Checkerboard)
+    checkerboard = np.zeros((size, size))
+    square_size = 16  # 方块大小
+    for i in range(0, size, square_size):
+        for j in range(0, size, square_size):
+            if (i // square_size + j // square_size) % 2 == 0:
+                checkerboard[i:i+square_size, j:j+square_size] = 1.0
+
+    # 2. Chirp 信号图 (频率随距离增加的正弦波)
+    # 公式: sin(2 * pi * k * r^2), r是到中心的距离
+    chirp = np.zeros((size, size))
+    center = size // 2
+    k = 0.002  # 频率增长系数
+    y, x = np.ogrid[:size, :size]
+    r = np.sqrt((x - center)**2 + (y - center)**2)
+    chirp = 0.5 + 0.5 * np.sin(2 * np.pi * k * r**2)
+
+    return checkerboard, chirp
+
+# ==========================================
+# 第一部分：混叠观察与高斯滤波
+# ==========================================
+def part1_aliasing_demo():
+    print("正在运行第一部分：混叠观察...")
+    img_check, img_chirp = create_test_images()
+    M = 4  # 下采样倍率
+
+    # 1. 直接下采样 (Nearest Neighbor)
+    # 先resize缩小，再resize放大以便观察（模拟直接丢像素）
+    h, w = img_check.shape
+    small_h, small_w = h // M, w // M
+
+    # 直接降采样
+    down_direct_check = cv2.resize(img_check, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
+    down_direct_chirp = cv2.resize(img_chirp, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
+
+    # 放大回原尺寸用于显示
+    vis_direct_check = cv2.resize(down_direct_check, (w, h), interpolation=cv2.INTER_NEAREST)
+    vis_direct_chirp = cv2.resize(down_direct_chirp, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    # 2. 高斯滤波后下采样 (Anti-aliasing)
+    # 理论 sigma = 0.45 * M
+    sigma = 0.45 * M
+    # 核大小通常取 6*sigma 或根据经验设定
+    ksize = (int(6*sigma)//2*2+1, int(6*sigma)//2*2+1)
+
+    blurred_check = cv2.GaussianBlur(img_check, ksize, sigma)
+    blurred_chirp = cv2.GaussianBlur(img_chirp, ksize, sigma)
+
+    # 降采样
+    down_blur_check = cv2.resize(blurred_check, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+    down_blur_chirp = cv2.resize(blurred_chirp, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+
+    # 放大回原尺寸用于显示
+    vis_blur_check = cv2.resize(down_blur_check, (w, h), interpolation=cv2.INTER_LINEAR)
+    vis_blur_chirp = cv2.resize(down_blur_chirp, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    # 3. 绘制频谱 (FFT) - 以 Chirp 图为例
+    def get_fft(img):
+        f = fftpack.fft2(img)
+        fshift = fftpack.fftshift(f)
+        magnitude_spectrum = 20 * np.log(np.abs(fshift) + 1e-10) # 加极小值防止log(0)
+        return magnitude_spectrum
+
+    fft_original = get_fft(img_chirp)
+    fft_direct = get_fft(vis_direct_chirp)
+    fft_blur = get_fft(vis_blur_chirp)
+
+    # 显示结果
+    plt.figure(figsize=(15, 10))
+
+    plt.subplot(3, 3, 1), plt.imshow(img_chirp, cmap='gray'), plt.title('原始 Chirp 图'), plt.axis('off')
+    plt.subplot(3, 3, 2), plt.imshow(vis_direct_chirp, cmap='gray'), plt.title('直接下采样 (严重混叠)'), plt.axis('off')
+    plt.subplot(3, 3, 3), plt.imshow(vis_blur_chirp, cmap='gray'), plt.title('高斯滤波后下采样 (无混叠)'), plt.axis('off')
+
+    plt.subplot(3, 3, 4), plt.imshow(fft_original, cmap='gray'), plt.title('原始频谱'), plt.axis('off')
+    plt.subplot(3, 3, 5), plt.imshow(fft_direct, cmap='gray'), plt.title('直接下采样频谱 (频谱重叠)'), plt.axis('off')
+    plt.subplot(3, 3, 6), plt.imshow(fft_blur, cmap='gray'), plt.title('滤波后频谱 (高频被切除)'), plt.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+# ==========================================
+# 第二部分：验证 sigma 公式
+# ==========================================
+def part2_sigma_verification():
+    print("正在运行第二部分：验证 Sigma 公式...")
+    _, img_chirp = create_test_images()
+    M = 4
+    h, w = img_chirp.shape
+    small_h, small_w = h // M, w // M
+
+    sigmas = [0.5, 1.0, 2.0, 4.0]
+    theoretical_sigma = 0.45 * M  # 1.8
+
+    plt.figure(figsize=(15, 8))
+    plt.subplot(2, 3, 1), plt.imshow(img_chirp, cmap='gray'), plt.title('原始图像'), plt.axis('off')
+
+    for i, sigma in enumerate(sigmas):
+        ksize = (int(6*sigma)//2*2+1, int(6*sigma)//2*2+1)
+        if ksize[0] == 0: ksize = (1,1)
+
+        blurred = cv2.GaussianBlur(img_chirp, ksize, sigma)
+        down = cv2.resize(blurred, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+        vis = cv2.resize(down, (w, h), interpolation=cv2.INTER_LINEAR)
+
+        plt.subplot(2, 3, i+2)
+        plt.imshow(vis, cmap='gray')
+        title = f"Sigma={sigma}"
+        if sigma < theoretical_sigma:
+            title += "\n(混叠残留)"
+        elif sigma > theoretical_sigma:
+            title += "\n(过度模糊)"
+        else:
+            title += "\n(接近理论值)"
+        plt.title(title)
+        plt.axis('off')
+
+    # 绘制理论最佳值
+    sigma_best = theoretical_sigma
+    ksize_best = (int(6*sigma_best)//2*2+1, int(6*sigma_best)//2*2+1)
+    blurred_best = cv2.GaussianBlur(img_chirp, ksize_best, sigma_best)
+    down_best = cv2.resize(blurred_best, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+    vis_best = cv2.resize(down_best, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    plt.subplot(2, 3, 6)
+    plt.imshow(vis_best, cmap='gray')
+    plt.title(f'理论最佳 Sigma={theoretical_sigma:.1f}')
+    plt.axis('off')
+
+    plt.suptitle(f"下采样倍率 M={M} 时不同 Sigma 的效果对比")
+    plt.tight_layout()
+    plt.show()
+
+# ==========================================
+# 第三部分：自适应下采样
+# ==========================================
+def part3_adaptive_sampling():
+    print("正在运行第三部分：自适应下采样...")
+    # 使用棋盘格更能体现局部频率差异
+    img_check, _ = create_test_images()
+    h, w = img_check.shape
+
+    # 1. 计算局部梯度 (使用 Sobel 算子)
+    # 梯度越大，代表频率越高，需要的 sigma 越大，允许的 M 越小
+    grad_x = cv2.Sobel(img_check, cv2.CV_64F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(img_check, cv2.CV_64F, 0, 1, ksize=3)
+    gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+
+    # 归一化梯度用于可视化
+    grad_norm = cv2.normalize(gradient_magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    # 2. 基于梯度生成自适应 Sigma 图
+    # 假设梯度越大，Sigma 应该越大。这里做一个简单的线性映射
+    # 归一化梯度到 0-1
+    grad_normalized = gradient_magnitude / np.max(gradient_magnitude)
+
+    # 基础 Sigma (平滑区域) 到 最大 Sigma (边缘区域)
+    min_sigma = 0.5
+    max_sigma = 3.0
+
+    # 生成每个像素对应的 Sigma (实际应用中通常分块处理，这里为了演示逐像素处理概念)
+    sigma_map = min_sigma + (max_sigma - min_sigma) * grad_normalized
+
+    #
+
+    # 方案：图像分块 (例如 32x32)，每块计算一个 Sigma
+    block_size = 32
+    adaptive_result = np.zeros_like(img_check)
+
+    for y in range(0, h, block_size):
+        for x in range(0, w, block_size):
+            # 获取当前块的梯度均值
+            block_grad = sigma_map[y:y+block_size, x:x+block_size]
+            local_sigma = np.mean(block_grad)
+
+            # 提取图像块
+            block_img = img_check[y:y+block_size, x:x+block_size]
+
+            # 对块进行高斯模糊
+            ksize = (int(6*local_sigma)//2*2+1, int(6*local_sigma)//2*2+1)
+            if ksize[0] < 1: ksize = (1,1)
+            # 边界处理：如果块超出边界则跳过或填充，这里简单处理
+            if block_img.shape[0] == block_size and block_img.shape[1] == block_size:
+                blurred_block = cv2.GaussianBlur(block_img, ksize, local_sigma)
+                adaptive_result[y:y+block_size, x:x+block_size] = blurred_block
+
+    # 4. 下采样 (假设 M=4)
+    M = 4
+    small_h, small_w = h // M, w // M
+
+    # 统一小 Sigma (会导致高频混叠)
+    res_uniform_small = cv2.resize(cv2.GaussianBlur(img_check, (1,1), 0.5), (small_w, small_h))
+
+    # 统一大 Sigma (会导致低频过度模糊)
+    res_uniform_large = cv2.resize(cv2.GaussianBlur(img_check, (13,13), 3.0), (small_w, small_h))
+
+    # 自适应结果下采样
+    res_adaptive = cv2.resize(adaptive_result, (small_w, small_h))
+
+    # 放大显示
+    def zoom(img):
+        return cv2.resize(img, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    plt.figure(figsize=(15, 5))
+    plt.subplot(1, 4, 1), plt.imshow(grad_norm, cmap='gray'), plt.title('梯度幅值 (频率估计)'), plt.axis('off')
+    plt.subplot(1, 4, 2), plt.imshow(zoom(res_uniform_small), cmap='gray'), plt.title('统一小 Sigma (混叠)'), plt.axis('off')
+    plt.subplot(1, 4, 3), plt.imshow(zoom(res_uniform_large), cmap='gray'), plt.title('统一大 Sigma (模糊)'), plt.axis('off')
+    plt.subplot(1, 4, 4), plt.imshow(zoom(res_adaptive), cmap='gray'), plt.title('自适应 Sigma (折中)'), plt.axis('off')
+
+    plt.suptitle("自适应下采样策略对比 (下采样后放大显示)")
+    plt.tight_layout()
+    plt.show()
+
+# ==========================================
+# 主程序
+# ==========================================
+if __name__ == "__main__":
+    # 第一部分：混叠与抗混叠
+    part1_aliasing_demo()
+
+    # 第二部分：Sigma 验证
+    part2_sigma_verification()
+
+    # 第三部分：自适应
+    part3_adaptive_sampling()
